@@ -73,4 +73,3 @@ async def delete_task(task_id: int):
 async def slow_endpoint():
     await asyncio.sleep(1)
     return {'message': 'done'}
-
