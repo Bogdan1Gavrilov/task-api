@@ -1,5 +1,5 @@
 # task-api
-CRUD-сервис для управления задачами. FastAPI + Docker + автодеплой.
+CRUD-сервис для управления задачами. FastAPI + Docker + автодеплой
 ## Локальный запуск
 
     conda create -y -n task-api python=3.11
