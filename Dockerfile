@@ -11,6 +11,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 #копируем папку app/ внутрь контейнера в /app/app
 COPY app ./app
 
+COPY models/ ./models/
+
 #Не буферизовать stdout - иначе логи могут "застрять" и не попасть в docker logs
 ENV PYTHONBUFFERED=1
 #Документируем, что контейнер слушает порт 8000 (метаданные для других инструментов)
