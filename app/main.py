@@ -1,92 +1,72 @@
-import logging
-import asyncio
+from contextlib import asynccontextmanager
+from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, status
-from pydantic import BaseModel, Field
+import gradio as gr
+import joblib
+import pandas as pd
+from fastapi import FastAPI, Request
 
-from app.core.config import settings
-from app.core.logging import setup_logging
-
-setup_logging(settings.log_level)
-logger = logging.getLogger(__name__)
+from app.schemas.predict import PredictRequest, PredictResponse
 
 
-app = FastAPI(
-    title=settings.app_name,
-    version=settings.app_version,
-    debug=settings.debug,
+MODEL_PATH = Path("models/wine_model.pkl")
+CLASS_NAMES = ["class_0", "class_1", "class_2"]
+FEATURE_ORDER = [
+    "alcohol", "malic_acid", "ash", "alcalinity_of_ash", "magnesium",
+    "total_phenols", "flavanoids", "nonflavanoid_phenols",
+    "proanthocyanins", "color_intensity", "hue",
+    "od280/od315_of_diluted_wines", "proline",
+]
+
+def _build_gradio_demo(model) -> gr.Interface:
+    def predict_wine(*features):
+        row = pd.DataFrame([dict(zip(FEATURE_ORDER, features))])[FEATURE_ORDER]
+        proba = model.predict_proba(row)[0]
+        return {CLASS_NAMES[i]: float(p) for i, p in enumerate(proba)}
+
+    return gr.Interface(
+        fn=predict_wine,
+        inputs=[gr.Number(label=name, value=v) for name, v in zip(
+            FEATURE_ORDER,
+            [13.5, 1.8, 2.4, 18.0, 105.0, 2.7, 2.9, 0.28, 1.85, 5.5, 1.05, 3.2, 1180.0],
+        )],
+        outputs=gr.Label(label='Распределение вероятностей'),
+        title='Wine classifier',
+        description='Введите 13 показателей лабораторного анализа партии'
     )
 
-class TaskCreate(BaseModel):
-    title: str = Field(min_length=1, max_length=100)
-    description: str = Field(default='', max_length=2000)
 
-class Task(BaseModel):
-    id: int
-    title: str
-    description: str
-    done: bool = False
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    #грузим модель один раз на старте
+    app.state.model = joblib.load(MODEL_PATH)
+    yield
 
-class TaskUpdate(BaseModel):
-    title: str | None = Field(default=None, min_length=1, max_length=200)
-    description: str | None = Field(default=None, max_length=2000)
-    done: bool | None = None
+app = FastAPI(lifespan=lifespan)
 
-tasks: dict[int, Task] = {}
-next_id: int = 1
+@app.get("/health")
+def health() -> dict[str, str]:
+    return {"status": "ok"}
 
-@app.get('/health')
-async def health():
-    logger.info("health check called")
-    return {'status': "ok"}
 
-@app.post('/tasks', response_model=Task)
-async def create_task(payload: TaskCreate):
-    global next_id
-    task = Task(
-        id=next_id,
-        title=payload.title,
-        description=payload.description,
-        done=False,
+@app.post("/predict", response_model=PredictResponse)
+def predict(req: PredictRequest, request: Request) -> PredictResponse:
+    model = request.app.state.model
+    #Превращаем Pydantic-объект в DataFrame с теми же именами колонок,
+    #которые модель видела на обучении. by_alias=True вернет
+    #оригинальное имя od280/od315_of_diluted_wines со слэшем
+    row = pd.DataFrame([req.model_dump(by_alias=True)])
+    row = row[FEATURE_ORDER]
+
+    proba = model.predict_proba(row)[0]
+    pred_idx = int(proba.argmax())
+
+    return PredictResponse(
+        predicted_class=CLASS_NAMES[pred_idx],
+        probabilities={CLASS_NAMES[i]: float(round(p, 4)) for i, p in enumerate(proba)}
     )
-    tasks[task.id] = task
-    next_id += 1
-    return task
 
-@app.get('/tasks', response_model=list[Task])
-async def list_tasks():
-    return list(tasks.values())
-
-@app.get("/tasks/{task_id}", response_model=Task)
-async def get_task(task_id: int):
-    task = tasks.get(task_id)
-    if task is None:
-        raise HTTPException(status_code=404, detail='task not found')
-    return task
-
-@app.patch('/tasks/{task_id}', response_model=Task)
-async def update_task(task_id: int, payload: TaskUpdate):
-    task = tasks.get(task_id)
-    if task is None:
-        raise HTTPException(status_code=404, detail='task not found')
-    updated = task.model_copy(
-        update={k: v for k, v in payload.model_dump().items() if v is not None}
-    )
-    tasks[task_id] = updated
-    return updated
-
-@app.delete('/tasks/{task_id}', status_code=status.HTTP_204_NO_CONTENT)
-async def delete_task(task_id: int):
-    if task_id not in tasks:
-        raise HTTPException(status_code=404, detail='task not found')
-    del tasks[task_id]
-    return None
-
-@app.get("/slow")
-async def slow_endpoint():
-    await asyncio.sleep(1)
-    return {'message': 'done'}
-
-@app.get("/version")
-async def version() -> dict[str, str]:
-    return {'version': settings.app_version}
+#Gradio-demo собирается при импорте, модель использует через замыкание
+_model = joblib.load(MODEL_PATH)
+demo = _build_gradio_demo(_model)
+app = gr.mount_gradio_app(app, demo, path='/')
