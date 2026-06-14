@@ -1,7 +1,15 @@
 from unittest.mock import MagicMock, patch
+
 from fastapi.testclient import TestClient
 
-from app.main import app
+# Мокаем build_rag_chain ДО импорта app
+mock_chain = MagicMock()
+mock_chain.invoke.return_value = "Mock answer"
+mock_retriever = MagicMock()
+mock_retriever.invoke.return_value = []
+
+with patch("app.main.build_rag_chain", return_value=(mock_chain, mock_retriever)):
+    from app.main import app
 
 
 def test_health() -> None:
@@ -12,14 +20,15 @@ def test_health() -> None:
 
 
 def test_chat_validates_empty_question() -> None:
-    """Empty question must be rejected by Pydantic before reaching the chain"""
+    """Empty question must be rejected by Pydantic before reaching the chain."""
     with TestClient(app) as client:
         response = client.post("/chat", json={"question": ""})
     assert response.status_code == 422
 
+
 @patch("app.main.build_rag_chain")
 def test_chat_returns_answer_with_sources(mock_build) -> None:
-    """Some test with fully mocked chain - no LLM call, no Qdrant call"""
+    """Smoke test with fully mocked chain — no LLM call, no Qdrant call."""
     mock_chain = MagicMock()
     mock_chain.invoke.return_value = "Ridge uses L2 penalty [1]."
 
@@ -33,6 +42,7 @@ def test_chat_returns_answer_with_sources(mock_build) -> None:
 
     with TestClient(app) as client:
         response = client.post("/chat", json={"question": "What is Ridge?"})
+
     assert response.status_code == 200
     body = response.json()
     assert "Ridge uses L2" in body["answer"]
