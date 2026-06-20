@@ -41,11 +41,30 @@ Answer (with citations):"""
 
 def get_vectorestore() -> QdrantVectorStore:
     """Поднять клиент Qdrant + эмбеддер и завернуть в LangChain-VectorStore."""
-    client  = QdrantClient(url=settings.qdrant_url)
+    client = QdrantClient(url=settings.qdrant_url)
     embeddings = HuggingFaceEmbeddings(
         model_name=settings.embedding_model,
         encode_kwargs={"normalize_embeddings": settings.normalize_embeddings},
     )
+    
+    # ПРОВЕРЯЕМ И СОЗДАЕМ КОЛЛЕКЦИЮ ЕСЛИ НЕТ
+    from qdrant_client.http import models
+    collections = client.get_collections().collections
+    collection_names = [c.name for c in collections]
+    
+    if settings.collection_name not in collection_names:
+        # ПОЛУЧАЕМ РАЗМЕР ВЕКТОРА
+        test_embedding = embeddings.embed_query("test")
+        vector_size = len(test_embedding)
+        
+        client.create_collection(
+            collection_name=settings.collection_name,
+            vectors_config=models.VectorParams(
+                size=vector_size,
+                distance=models.Distance.COSINE,
+            ),
+        )
+    
     return QdrantVectorStore(
         client=client,
         collection_name=settings.collection_name,

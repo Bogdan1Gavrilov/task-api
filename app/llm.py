@@ -4,8 +4,8 @@
 с любым провайдером, поддерживающим API OpenRouter.
 '''
 
-
 from langchain_openai import ChatOpenAI
+from langchain_core.caches import BaseCache  # добавить импорт
 from app.config import settings
 
 def get_llm() -> ChatOpenAI:
